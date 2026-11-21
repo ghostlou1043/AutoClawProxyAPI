@@ -1,0 +1,23 @@
+# 忽略 Git 目录
+.git
+.gitignore
+
+# 忽略本地编译产生的二进制文件
+autoclaw2api
+autoclaw2api.exe
+*.exe
+
+# 忽略本地运行产生的数据和日志
+*.log
+*.pid
+auths/
+data/
+config.json
+
+# 忽略你提到的启动脚本（它们不需要进入 Docker 镜像）
+start.sh
+run.bat
+
+# 忽略其他无关文件
+README.md
+LICENSE
