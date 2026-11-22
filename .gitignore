@@ -1,0 +1,33 @@
+# 编译产物与发布包
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+autoclaw2api
+dist/
+bin/
+build/
+*.zip
+
+# 运行时配置与敏感凭证文件
+config.json
+proxies.json
+proxypool.json
+state.json
+auths/
+data/
+logs/
+autoclawcn-*.json
+autoclawglobal-*.json
+*.log
+*.tmp
+
+# 系统与编辑器临时文件
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo

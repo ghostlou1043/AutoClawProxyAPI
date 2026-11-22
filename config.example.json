@@ -1,0 +1,30 @@
+{
+  "listen": "0.0.0.0:8080",
+  "panel_auth": {
+    "password_hash": ""
+  },
+  "api_keys": [],
+  "auth_dir": "./auths",
+  "data_dir": "./data",
+  "log_level": "info",
+  "upstream": {
+    "cn_base_url": "",
+    "global_base_url": ""
+  },
+  "retry": {
+    "max_retries": 3,
+    "base_backoff_ms": 500,
+    "max_backoff_ms": 8000,
+    "short_cooldown_sec": 60,
+    "long_cooldown_sec": 1800
+  },
+  "checkin": {
+    "enabled": true,
+    "time": "08:30"
+  },
+  "routing": {
+    "prefix_mode": "both",
+    "disabled_models": [],
+    "aliases": {}
+  }
+}
