@@ -16,7 +16,7 @@ import (
 )
 
 // Version 声明当前程序版本号。
-const Version = "v1.0.1"
+const Version = "v1.1.0"
 
 // PanelAuth 保存 Web 控制台登录密码的安全哈希（不存明文）。
 type PanelAuth struct {

@@ -159,7 +159,7 @@ func (e *Engine) Start(ctx context.Context) {
 		warmupCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
 		defer cancel()
 		_ = e.router.RefreshAllModels(warmupCtx)
-		e.RefreshAllBalances(warmupCtx)
+		e.RefreshAllBalancesWithTrigger(warmupCtx, "startup")
 	}()
 
 	go func() {
@@ -193,7 +193,7 @@ func (e *Engine) Start(ctx context.Context) {
 					continue
 				}
 				balCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-				_ = e.RefreshAllBalances(balCtx)
+				_ = e.RefreshAllBalancesWithTrigger(balCtx, "auto")
 				cancel()
 			}
 		}
@@ -360,8 +360,13 @@ func (e *Engine) RefreshAccountToken(ctx context.Context, id string) error {
 	return nil
 }
 
-// RefreshAccountBalance 查询并缓存单个账号的积分余额。
+// RefreshAccountBalance 查询并缓存单个账号的积分余额（默认触发源 manual）。
 func (e *Engine) RefreshAccountBalance(ctx context.Context, id string) (float64, error) {
+	return e.RefreshAccountBalanceWithTrigger(ctx, id, "manual")
+}
+
+// RefreshAccountBalanceWithTrigger 查询并缓存单个账号的积分余额，并记录变动审计触发来源。
+func (e *Engine) RefreshAccountBalanceWithTrigger(ctx context.Context, id, trigger string) (float64, error) {
 	acc, ok := e.pool.GetByID(id)
 	if !ok {
 		return 0, fmt.Errorf("账号不存在: %s", id)
@@ -380,7 +385,7 @@ func (e *Engine) RefreshAccountBalance(ctx context.Context, id string) (float64,
 		}
 		return 0, err
 	}
-	e.pool.UpdateBalance(id, bal)
+	e.pool.UpdateBalanceWithTrigger(id, bal, trigger)
 	return bal, nil
 }
 
@@ -395,6 +400,11 @@ func (e *Engine) hasBalanceRefreshCandidates() bool {
 
 // RefreshAllBalances 并发查询所有启用账号的积分余额（并发上限收敛为 2，避免同出口 IP 突发请求）。
 func (e *Engine) RefreshAllBalances(ctx context.Context) int {
+	return e.RefreshAllBalancesWithTrigger(ctx, "manual")
+}
+
+// RefreshAllBalancesWithTrigger 并发查询所有启用账号的积分余额，并附带触发来源用于余额变动归因。
+func (e *Engine) RefreshAllBalancesWithTrigger(ctx context.Context, trigger string) int {
 	list := e.pool.AllAccounts()
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, balanceRefreshConc)
@@ -410,7 +420,7 @@ func (e *Engine) RefreshAllBalances(ctx context.Context) int {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			if _, err := e.RefreshAccountBalance(ctx, id); err == nil {
+			if _, err := e.RefreshAccountBalanceWithTrigger(ctx, id, trigger); err == nil {
 				mu.Lock()
 				okCount++
 				mu.Unlock()
@@ -491,17 +501,18 @@ func (e *Engine) CheckinAccount(ctx context.Context, id, source string) CheckinR
 		rec.Status = "done"
 		rec.Points = outcome.Points
 		rec.Message = outcome.Message
+		e.pool.UpdateCheckinStateWithPoints(acc.ID, today, rec.Status, rec.Message, rec.Points)
 		if errAct := protocol.ReportLoginActive(ctx, client, baseURL, acc.Cred.AccessToken, acc.Cred.DeviceID); errAct == nil {
 			rec.ActiveReported = true
 		}
 		// 签到成功后刷新一次余额
-		_, _ = e.RefreshAccountBalance(ctx, acc.ID)
+		_, _ = e.RefreshAccountBalanceWithTrigger(ctx, acc.ID, "checkin")
 	} else {
 		rec.Status = "failed"
 		rec.Message = outcome.Message
 	}
 
-	e.pool.UpdateCheckinState(acc.ID, today, rec.Status, rec.Message)
+	e.pool.UpdateCheckinStateWithPoints(acc.ID, today, rec.Status, rec.Message, rec.Points)
 	e.appendHistory(rec)
 	if e.logger != nil {
 		e.logger.Info("Checkin", "账号 [%s] 签到结果: %s (%s)", rec.AccountLabel, rec.Status, rec.Message)

@@ -38,12 +38,15 @@ type Account struct {
 	LastError     string
 	Balance       float64
 	BalanceKnown  bool
-	BalanceAt     time.Time
-	LastCheckin   string // YYYY-MM-DD
-	CheckinStatus string // done | already | failed | pending
-	CheckinMsg    string
-	TotalRequests int64
-	FailedCount   int64
+	BalanceAt       time.Time
+	LastCheckin       string // YYYY-MM-DD
+	LastCheckinAt     time.Time
+	LastCheckinPoints int64
+	CheckinStatus     string // done | already | failed | pending
+	CheckinMsg      string
+	TotalRequests   int64
+	LastBalanceReqs int64
+	FailedCount     int64
 }
 
 // EffectiveStatus 计算账号在指定时刻的实时状态。
@@ -117,29 +120,39 @@ type stickyBinding struct {
 
 // Pool 管理任意数量的国内版与国际版账号，支持目录热更新、轮询调度、短时会话粘性与故障冷却。
 type Pool struct {
-	mu        sync.RWMutex
-	cfgMgr    *config.Manager
-	logger    *logging.Logger
-	items     map[string]*Account
-	order     []string
-	rrIndex   map[string]uint64
-	sticky    map[string]stickyBinding
-	stickyTTL time.Duration
+	mu               sync.RWMutex
+	cfgMgr           *config.Manager
+	logger           *logging.Logger
+	items            map[string]*Account
+	order            []string
+	rrIndex          map[string]uint64
+	sticky           map[string]stickyBinding
+	stickyTTL        time.Duration
+	balanceSnapshots map[string]BalanceSnapshot
+	balanceUsage     map[string][]BalanceChangeRecord
+	balanceEvents    map[string][]BalanceChangeRecord
+	balanceSeq       int64
 }
 
 // NewPool 创建多账号池并立刻从凭证目录完成首次扫描加载。
 func NewPool(cfgMgr *config.Manager, logger *logging.Logger) (*Pool, error) {
 	p := &Pool{
-		cfgMgr:    cfgMgr,
-		logger:    logger,
-		items:     make(map[string]*Account),
-		rrIndex:   make(map[string]uint64),
-		sticky:    make(map[string]stickyBinding),
-		stickyTTL: defaultStickyTTL,
+		cfgMgr:           cfgMgr,
+		logger:           logger,
+		items:            make(map[string]*Account),
+		rrIndex:          make(map[string]uint64),
+		sticky:           make(map[string]stickyBinding),
+		stickyTTL:        defaultStickyTTL,
+		balanceSnapshots: make(map[string]BalanceSnapshot),
+		balanceUsage:     make(map[string][]BalanceChangeRecord),
+		balanceEvents:    make(map[string][]BalanceChangeRecord),
 	}
 	if err := p.SyncFromDisk(); err != nil {
 		return nil, err
 	}
+	p.mu.Lock()
+	p.loadBalanceHistoryLocked()
+	p.mu.Unlock()
 	return p, nil
 }
 
@@ -620,25 +633,39 @@ func (p *Pool) ApplyRefreshedTokens(id, accessToken, refreshToken string, expire
 	return nil
 }
 
-// UpdateBalance 更新内存中的账号积分余额缓存。
+// UpdateBalance 更新内存中的账号积分余额缓存并记录变动审计日志（默认触发源 manual）。
 func (p *Pool) UpdateBalance(id string, balance float64) {
+	p.UpdateBalanceWithTrigger(id, balance, "manual")
+}
+
+// UpdateBalanceWithTrigger 更新账号积分余额并按触发来源执行自动归因审计与持久化。
+func (p *Pool) UpdateBalanceWithTrigger(id string, balance float64, trigger string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if acc, ok := p.items[id]; ok {
-		acc.Balance = balance
-		acc.BalanceKnown = true
-		acc.BalanceAt = time.Now()
+		p.applyBalanceUpdateLocked(acc, balance, trigger)
 	}
 }
 
 // UpdateCheckinState 记录账号今日签到状态。
 func (p *Pool) UpdateCheckinState(id, dateStr, status, msg string) {
+	p.UpdateCheckinStateWithPoints(id, dateStr, status, msg, 0)
+}
+
+// UpdateCheckinStateWithPoints 记录账号今日签到状态及本次签到奖励积分（供后续余额变动精准归因）。
+func (p *Pool) UpdateCheckinStateWithPoints(id, dateStr, status, msg string, points int64) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if acc, ok := p.items[id]; ok {
 		acc.LastCheckin = dateStr
 		acc.CheckinStatus = status
 		acc.CheckinMsg = msg
+		if status == "done" {
+			acc.LastCheckinAt = time.Now()
+			if points > 0 {
+				acc.LastCheckinPoints = points
+			}
+		}
 	}
 }
 
@@ -704,6 +731,7 @@ func (p *Pool) Delete(id string) error {
 	}
 	filePath := acc.FilePath
 	delete(p.items, id)
+	p.deleteBalanceHistoryLocked(id)
 	p.rebuildOrderLocked()
 	p.mu.Unlock()
 
