@@ -14,7 +14,7 @@ set -eu
 
 STATE_DIR="${STATE_DIR:-/app}"
 REMOTE="${STATE_REMOTE:-}"
-INTERVAL="${STATE_SYNC_INTERVAL:-60}"
+INTERVAL="${STATE_SYNC_INTERVAL:-600}"
 ALLOW_EMPTY="${ALLOW_EMPTY:-0}"
 
 log() { printf '[state-sync] %s\n' "$*"; }
