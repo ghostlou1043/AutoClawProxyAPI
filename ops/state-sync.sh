@@ -7,6 +7,7 @@
 #   1. 启动前先拉取快照，拉取失败就退出，绝不让空目录覆盖线上备份；
 #   2. 运行期每 STATE_SYNC_INTERVAL 秒推一次完整快照，另存一份按天归档；
 #   3. 收到 SIGTERM 后先停应用、等它写完磁盘，再推最后一次。
+#   4. mihomo 内核（/app/mihomo）等可再下载的大文件不纳入快照。
 # 应用所有落盘都是「临时文件 + rename」，所以任意时刻拍的快照都不会是半个文件。
 # =============================================================================
 set -eu
@@ -35,9 +36,15 @@ push_state() {
 	workdir=$(mktemp -d /tmp/state.XXXXXX) || return 1
 	work="$workdir/state.tar.gz"
 
+	# mihomo 内核（./mihomo，Linux 下几十 MB）与下载中的 .part/.tmp 不进快照：
+	# 它每次冷启动都能重新下载，而一旦打包进来，每次推送都会变成几十 MB 的流量。
 	# tar 退出码 1 表示「读取过程中文件有变化」的警告，快照本身仍可用
 	tar_rc=0
-	tar -C "$STATE_DIR" --exclude='*.tmp' --exclude='./config.example.json' -czf "$work" . 2>/dev/null || tar_rc=$?
+	tar -C "$STATE_DIR" \
+		--exclude='./mihomo*' \
+		--exclude='./config.example.json' \
+		--exclude='*.tmp' \
+		-czf "$work" . 2>/dev/null || tar_rc=$?
 	if [ "$tar_rc" -ne 0 ] && [ "$tar_rc" -ne 1 ]; then
 		rm -rf "$workdir"
 		return 1

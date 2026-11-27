@@ -1,7 +1,8 @@
 # 无持久盘部署：R2 / B2 状态快照同步
 
 Orkestr 免费层的容器文件系统是临时的，重启即丢。本目录用一个入口脚本把 `/app`
-（`config.json` + `auths/` + `data/`）整体打包成**单个** `state.tar.gz` 存到对象存储：
+（`config.json` + `auths/` + `data/`，**不含** `mihomo` 内核）整体打包成**单个**
+`state.tar.gz` 存到对象存储：
 
 - **启动前**：拉取快照并解包，失败则拒绝启动（防止空目录覆盖线上备份）；
 - **运行期**：每 `STATE_SYNC_INTERVAL` 秒（默认 60）推送一次，另写一份 `daily/YYYY-MM-DD.tar.gz`；
@@ -39,6 +40,7 @@ s3/r2 桶
 | `RCLONE_CONFIG_R2_ENDPOINT` | `https://<ACCOUNT_ID>.r2.cloudflarestorage.com` |
 | `RCLONE_CONFIG_R2_REGION` | `auto` |
 | `RCLONE_CONFIG_R2_ACL` | `private` |
+| `RCLONE_CONFIG_R2_NO_CHECK_BUCKET` | `true`（对象级权限令牌必须加，否则 HeadBucket 报 403） |
 
 ### Backblaze B2（原生 API）
 
@@ -84,4 +86,9 @@ tar -C /app -xzf ./state.tar.gz
 - **端口必须跟平台走**。入口脚本检测到 `PORT` 会自动追加 `-listen 0.0.0.0:$PORT`，不用改配置。
 - **单实例**。快照是「整目录覆盖」，没有分布式锁，不能多副本同时跑。
 - **流量**。每次推送约几十 KB，60 秒间隔一个月约 4 GB（300 秒则约 1 GB），远低于 100 GB/月。
+- **mihomo 内核不进快照**。它在 `/app/mihomo`，Linux 下几十 MB；如果打包进来，每次推送都会
+  多几十 MB 流量（60 秒间隔一个月能跑到几十 GB，直接爆掉免费额度）。代价是每次冷启动后内核
+  不在了，需要到面板「代理管理」重新点一次下载——但 `data/mihomo/` 里的订阅与节点配置是备份的，
+  下载完就恢复原样。如果休眠很频繁、嫌每次下载麻烦，可以在 Dockerfile 里把内核预置到
+  `/app/mihomo`，这样它随镜像而来，也不会进快照。
 - **构建**。`apk add rclone` 让镜像大约多 20 MB，构建时间只多几秒（免费层 300 分钟/月）。
